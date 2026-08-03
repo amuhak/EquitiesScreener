@@ -11,6 +11,20 @@ add_executable(EquitiesScreener
         engine/Engine.cpp
         engine/Engine.h
         io/Csv.cpp
-        io/Csv.h)
+        io/Csv.h
+        config/Config.cpp
+        config/Config.h)
 
 target_include_directories(EquitiesScreener PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Framework-free unit tests for the settings-file parser
+add_executable(EquitiesScreenerConfigTests
+        config/Config_test.cpp
+        data/Equity.cpp
+        data/Equity.h
+        engine/Engine.cpp
+        engine/Engine.h
+        config/Config.cpp
+        config/Config.h)
+
+target_include_directories(EquitiesScreenerConfigTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -26,5 +26,8 @@ Makefile
 # VS Code
 .vscode/
 
+# Screener-generated output (created by settings-file mode)
+*_screened.csv
+
 # macOS
 .DS_Store

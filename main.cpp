@@ -1,17 +1,21 @@
+#include "config/Config.h"
 #include "data/Equity.h"
 #include "engine/Engine.h"
 #include "io/Csv.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
-#include <map>
+#include <limits>
 #include <optional>
 #include <print>
-#include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 // ============================================================
@@ -19,58 +23,38 @@
 // ============================================================
 
 struct CliArgs {
-    std::string                                       inputFile;
-    std::vector<Engine::FilterRule>                   filters;
-    std::optional<std::pair<Data::Metric, Engine::SortOrder>> sort;
-    std::string                                       outputFile;
+    std::string                                             inputFile;   // positional or --input
+    std::optional<std::string>                              configFile;  // --config
+    std::vector<Engine::FilterRule>                         filters;     // -f (CLI extras)
+    std::optional<std::pair<Data::Metric, Engine::SortOrder>> sort;      // -s
+    std::string                                             outputFile;  // -o
     bool pretty = false;
     bool help   = false;
     bool valid  = true;
 };
 
 // ============================================================
-//  Metric name helpers
+//  CLI helpers
 // ============================================================
 
 namespace {
-    std::string toUpper(std::string_view sv) {
-        std::string out;
-        for (char c : sv)
-            out += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        return out;
-    }
-
-    Data::Metric metricFromString(std::string_view name) {
-        static const std::map<std::string_view, Data::Metric> map = {
-            {"SPOTPRICE", Data::Metric::SpotPrice},
-            {"PE",        Data::Metric::PE},
-            {"FORWARDPE", Data::Metric::ForwardPE},
-            {"PB",        Data::Metric::PB},
-            {"PS",        Data::Metric::PS},
-            {"EVEBITDA",  Data::Metric::EVEBITDA},
-            {"ROA",       Data::Metric::ROA},
-            {"ROE",       Data::Metric::ROE},
-            {"ROIC",      Data::Metric::ROIC},
-        };
-        auto it = map.find(toUpper(name));
-        return (it != map.end()) ? it->second : Data::Metric::SpotPrice;
-    }
-
-    bool isValidMetric(std::string_view name) {
-        static const auto sentinel = Data::Metric::SpotPrice;
-        // relies on metricFromString returning SpotPrice as sentinel for unknowns
-        return metricFromString(name) != sentinel
-            || toUpper(name) == "SPOTPRICE";
-    }
 
     void printUsage() {
         std::println(stderr,
             "EquitiesScreener - filter and rank stocks from a CSV file.\n"
             "\n"
             "Usage:\n"
-            "  EquitiesScreener <input.csv> [options]\n"
+            "  EquitiesScreener <input.csv> [options]          flag-based mode\n"
+            "  EquitiesScreener [--config <settings.ini>] [options]\n"
+            "                                                  settings-file mode\n"
+            "                                                  (auto-loads ./screener.ini\n"
+            "                                                   when no input/config given)\n"
             "\n"
-            "Options:\n"
+            "Settings-file mode:\n"
+            "  -c, --config <FILE>        Use FILE as the settings file.\n"
+            "  -i, --input <FILE>         Override the universe CSV declared in the file.\n"
+            "\n"
+            "Options (flag-based mode; in settings-file mode they extend every screen):\n"
             "  -f, --filter <METRIC:MIN:MAX>   Apply a filter. MAX is optional.\n"
             "                                  Repeatable. Examples:\n"
             "                                    -f PE:0:30       (0 <= PE <= 30)\n"
@@ -81,6 +65,7 @@ namespace {
             "                                  Example: -s ROE  or  -s PE:ASC\n"
             "\n"
             "  -o, --output <FILE>             Write CSV to file. Default: stdout.\n"
+            "                                  In settings-file mode only valid with ONE screen.\n"
             "\n"
             "  -p, --pretty                    Pretty-print results to terminal.\n"
             "\n"
@@ -93,7 +78,8 @@ namespace {
         if (colon1 == std::string_view::npos) return std::nullopt;
 
         std::string_view metricName = arg.substr(0, colon1);
-        if (!isValidMetric(metricName)) {
+        auto metric = Config::parseMetric(metricName);
+        if (!metric) {
             std::println(stderr, "Unknown metric: \"{}\"", metricName);
             return std::nullopt;
         }
@@ -132,14 +118,15 @@ namespace {
             }
         }
 
-        return Engine::FilterRule{metricFromString(metricName), minVal, maxVal};
+        return Engine::FilterRule{*metric, minVal, maxVal};
     }
 
     std::optional<std::pair<Data::Metric, Engine::SortOrder>>
     parseSortArg(std::string_view arg) {
         auto colon = arg.find(':');
         std::string_view metricName = arg.substr(0, colon);
-        if (!isValidMetric(metricName)) {
+        auto metric = Config::parseMetric(metricName);
+        if (!metric) {
             std::println(stderr, "Unknown sort metric: \"{}\"", metricName);
             return std::nullopt;
         }
@@ -149,8 +136,141 @@ namespace {
             if (orderStr == "ASC" || orderStr == "asc")
                 order = Engine::SortOrder::Ascending;
         }
-        return std::pair{metricFromString(metricName), order};
+        return std::pair{*metric, order};
     }
+
+    // shared error reporting for CSV reads
+    int reportCsvError(IO::CsvError error, std::string_view path) {
+        switch (error) {
+        case IO::CsvError::FileNotFound:
+            std::println(stderr, "Error: file not found - \"{}\"", path);
+            break;
+        case IO::CsvError::EmptyFile:
+            std::println(stderr, "Error: file is empty - \"{}\"", path);
+            break;
+        default:
+            std::println(stderr, "Error: could not read \"{}\"", path);
+            break;
+        }
+        return 1;
+    }
+
+    // ── legacy mode: the original flag-based CLI behavior ──
+    int runLegacyMode(const CliArgs& opts) {
+        auto csvResult = IO::readCsv(opts.inputFile);
+        if (!csvResult) return reportCsvError(csvResult.error(), opts.inputFile);
+
+        for (const auto& w : csvResult->warnings)
+            std::println(stderr, "Warning: {}", w);
+
+        Engine::Engine screener(std::move(csvResult->equities));
+        for (const auto& rule : opts.filters)
+            screener.addFilter(rule);
+
+        auto results = screener.runScreen();
+        if (opts.sort)
+            Engine::Engine::sortEquities(results, opts.sort->first, opts.sort->second);
+
+        if (opts.pretty) {
+            screener.printResults(results);
+        } else if (!opts.outputFile.empty()) {
+            auto written = IO::writeCsv(opts.outputFile, results);
+            if (!written) {
+                std::println(stderr, "Error: could not write to \"{}\"", opts.outputFile);
+                return 1;
+            }
+            std::println(stderr, "Wrote {} equities to \"{}\"", results.size(), opts.outputFile);
+        } else {
+            if (!IO::writeCsv(std::cout, results)) {
+                std::println(stderr, "Error: could not write to stdout");
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    // ── settings-file mode ──
+    int runConfigMode(const std::string& settingsPath, const CliArgs& opts) {
+        auto parsed = Config::parseSettingsFile(settingsPath);
+        if (!parsed) {
+            std::println(stderr, "Error: {}", parsed.error());
+            return 1;
+        }
+        Config::AppConfig config = std::move(*parsed);
+
+        // resolve input CSV: CLI override (positional or --input) > settings input
+        std::string inputPath = opts.inputFile.empty() ? config.inputFile : opts.inputFile;
+        if (inputPath.empty()) {
+            std::println(stderr,
+                "Error: no input CSV - set \"input =\" in \"{}\" or pass one on the command line",
+                settingsPath);
+            return 1;
+        }
+
+        if (!opts.outputFile.empty() && config.screens.size() != 1) {
+            std::println(stderr,
+                "Error: --output is only valid when the settings file defines exactly ONE screen "
+                "(use per-screen \"output =\" for multiple screens)");
+            return 2;
+        }
+
+        auto csvResult = IO::readCsv(inputPath);
+        if (!csvResult) return reportCsvError(csvResult.error(), inputPath);
+
+        for (const auto& w : csvResult->warnings)
+            std::println(stderr, "Warning: {}", w);
+
+        // the universe is read once and shared by every screen
+        Engine::Engine screener(std::move(csvResult->equities));
+
+        for (const auto& screen : config.screens) {
+            // 1) filters: settings first, CLI -f appended (AND-combined)
+            std::vector<Engine::FilterRule> rules = screen.filters;
+            rules.insert(rules.end(), opts.filters.begin(), opts.filters.end());
+
+            // 2) presence-aware screening: exclude + warn on missing metric data
+            std::vector<Data::Equity> results;
+            for (const auto& eq : screener.getUniverse()) {
+                bool missing = false;
+                for (const auto& rule : rules) {
+                    if (!eq.hasMetric(rule.metric)) {
+                        std::println(stderr, "Warning: Screen '{}': excluded {} - missing {} data",
+                                     screen.name, eq.getTicker(), Config::metricName(rule.metric));
+                        missing = true;   // report every missing metric (no break)
+                    }
+                }
+                if (missing) continue;
+                if (screener.matchesFilters(eq, rules)) results.push_back(eq);
+            }
+
+            // 3) sort: CLI -s overrides the screen's own sort
+            std::optional<Config::SortSpec> sortSpec;
+            if (opts.sort) {
+                sortSpec = Config::SortSpec{opts.sort->first, opts.sort->second};
+            } else if (screen.sort) {
+                sortSpec = screen.sort;
+            }
+            if (sortSpec)
+                Engine::Engine::sortEquities(results, sortSpec->metric, sortSpec->order);
+
+            // 4) output path: -o > output= > {name}_screened.csv
+            std::string outPath = opts.outputFile.empty()
+                ? (screen.outputFile ? *screen.outputFile : Config::defaultOutputName(screen.name))
+                : opts.outputFile;
+
+            auto written = IO::writeCsv(outPath, results);
+            if (!written) {
+                std::println(stderr, "Error: could not write to \"{}\"", outPath);
+                return 1;
+            }
+            std::println(stderr, "Screen '{}': wrote {} equities to \"{}\"",
+                         screen.name, results.size(), outPath);
+
+            if (opts.pretty) screener.printResults(results);
+        }
+        return 0;
+    }
+
 } // anonymous namespace
 
 // ============================================================
@@ -159,8 +279,6 @@ namespace {
 
 CliArgs parseArgs(int argc, char** argv) {
     CliArgs opts;
-    if (argc < 2) { opts.valid = false; return opts; }
-
     for (int i = 1; i < argc; ++i) {
         std::string_view arg{argv[i]};
 
@@ -170,6 +288,16 @@ CliArgs parseArgs(int argc, char** argv) {
         }
         if (arg == "-p" || arg == "--pretty") {
             opts.pretty = true;
+            continue;
+        }
+        if (arg == "-c" || arg == "--config") {
+            if (i + 1 >= argc) { opts.valid = false; return opts; }
+            opts.configFile = argv[++i];
+            continue;
+        }
+        if (arg == "-i" || arg == "--input") {
+            if (i + 1 >= argc) { opts.valid = false; return opts; }
+            opts.inputFile = argv[++i];
             continue;
         }
         if (arg == "-f" || arg == "--filter") {
@@ -192,23 +320,23 @@ CliArgs parseArgs(int argc, char** argv) {
             continue;
         }
 
-        if (opts.inputFile.empty() && !arg.starts_with('-')) {
-            opts.inputFile = arg;
-        } else if (!arg.starts_with('-')) {
-            opts.valid = false;
-            return opts;
+        if (!arg.starts_with('-')) {
+            if (opts.inputFile.empty()) {
+                opts.inputFile = arg;
+            } else {
+                opts.valid = false;   // multiple positional arguments
+                return opts;
+            }
         } else {
-            opts.valid = false;
+            opts.valid = false;       // unknown flag
             return opts;
         }
     }
-
-    if (opts.inputFile.empty()) opts.valid = false;
     return opts;
 }
 
 // ============================================================
-//  Main pipeline
+//  Main — mode dispatch
 // ============================================================
 
 int main(int argc, char* argv[]) {
@@ -218,55 +346,17 @@ int main(int argc, char* argv[]) {
         printUsage();
         return 0;
     }
-    if (!opts.valid || opts.inputFile.empty()) {
+    if (!opts.valid) {
         printUsage();
         return 2;
     }
 
-    // --- read CSV ---
-    auto csvResult = IO::readCsv(opts.inputFile);
-    if (!csvResult) {
-        switch (csvResult.error()) {
-        case IO::CsvError::FileNotFound:
-            std::println(stderr, "Error: file not found - \"{}\"", opts.inputFile);
-            break;
-        case IO::CsvError::EmptyFile:
-            std::println(stderr, "Error: file is empty - \"{}\"", opts.inputFile);
-            break;
-        default:
-            std::println(stderr, "Error: could not read \"{}\"", opts.inputFile);
-            break;
-        }
-        return 1;
-    }
+    if (opts.configFile) return runConfigMode(*opts.configFile, opts);
+    if (!opts.inputFile.empty()) return runLegacyMode(opts);
 
-    for (const auto& w : csvResult->warnings)
-        std::println(stderr, "Warning: {}", w);
+    // no --config and no input: auto-load ./screener.ini if present
+    if (std::filesystem::exists("screener.ini")) return runConfigMode("screener.ini", opts);
 
-    // --- engine ---
-    Engine::Engine screener(std::move(csvResult->equities));
-
-    for (const auto& rule : opts.filters)
-        screener.addFilter(rule);
-
-    auto results = screener.runScreen();
-
-    if (opts.sort)
-        Engine::Engine::sortEquities(results, opts.sort->first, opts.sort->second);
-
-    // --- output ---
-    if (opts.pretty) {
-        screener.printResults(results);
-    } else if (!opts.outputFile.empty()) {
-        auto written = IO::writeCsv(opts.outputFile, results);
-        if (!written) {
-            std::println(stderr, "Error: could not write to \"{}\"", opts.outputFile);
-            return 1;
-        }
-        std::println(stderr, "Wrote {} equities to \"{}\"", results.size(), opts.outputFile);
-    } else {
-        IO::writeCsv(std::cout, results);
-    }
-
-    return 0;
+    printUsage();
+    return 2;
 }
