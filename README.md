@@ -25,7 +25,7 @@ EquitiesScreener/
 
 ## Build
 
-Requires **CMake ≥ 3.20** and a **C++20**-capable compiler (GCC, Clang, or MSVC).
+Requires **CMake ≥ 3.20** and a **C++23**-capable compiler (GCC, Clang, or MSVC).
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
