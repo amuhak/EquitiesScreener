@@ -1,128 +1,272 @@
-#include <iostream>
 #include "data/Equity.h"
 #include "engine/Engine.h"
+#include "io/Csv.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <iostream>
+#include <map>
+#include <optional>
+#include <print>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
-int main() {
-    using namespace Data;
+// ============================================================
+//  CLI argument representation
+// ============================================================
 
-    // Create sample equities universe
-    Equity aapl("Apple Inc.", "NASDAQ", "AAPL", 220.50f);
-    aapl.setSector("Technology");
-    aapl.setPERatio(33.5f);
-    aapl.setForwardPE(28.0f);
-    aapl.setPBRatio(45.0f);
-    aapl.setPSRatio(8.2f);
-    aapl.setEVEBITDA(24.5f);
-    aapl.setROA(0.22f);
-    aapl.setROE(1.50f);
-    aapl.setROIC(0.55f);
+struct CliArgs {
+    std::string                                       inputFile;
+    std::vector<Engine::FilterRule>                   filters;
+    std::optional<std::pair<Data::Metric, Engine::SortOrder>> sort;
+    std::string                                       outputFile;
+    bool pretty = false;
+    bool help   = false;
+    bool valid  = true;
+};
 
-    Equity msft("Microsoft Corp.", "NASDAQ", "MSFT", 420.00f);
-    msft.setSector("Technology");
-    msft.setPERatio(35.0f);
-    msft.setForwardPE(30.0f);
-    msft.setPBRatio(12.0f);
-    msft.setPSRatio(13.0f);
-    msft.setEVEBITDA(22.0f);
-    msft.setROA(0.19f);
-    msft.setROE(0.38f);
-    msft.setROIC(0.28f);
+// ============================================================
+//  Metric name helpers
+// ============================================================
 
-    Equity nvda("NVIDIA Corp.", "NASDAQ", "NVDA", 125.00f);
-    nvda.setSector("Technology");
-    nvda.setPERatio(68.0f);
-    nvda.setForwardPE(40.0f);
-    nvda.setPBRatio(48.0f);
-    nvda.setPSRatio(32.0f);
-    nvda.setEVEBITDA(55.0f);
-    nvda.setROA(0.42f);
-    nvda.setROE(1.15f);
-    nvda.setROIC(0.70f);
-
-    Equity googl("Alphabet Inc.", "NASDAQ", "GOOGL", 175.00f);
-    googl.setSector("Communication Services");
-    googl.setPERatio(24.0f);
-    googl.setForwardPE(20.0f);
-    googl.setPBRatio(6.5f);
-    googl.setPSRatio(6.8f);
-    googl.setEVEBITDA(16.5f);
-    googl.setROA(0.16f);
-    googl.setROE(0.30f);
-    googl.setROIC(0.25f);
-
-    Equity amzn("Amazon.com Inc.", "NASDAQ", "AMZN", 180.00f);
-    amzn.setSector("Consumer Cyclical");
-    amzn.setPERatio(42.0f);
-    amzn.setForwardPE(32.0f);
-    amzn.setPBRatio(8.0f);
-    amzn.setPSRatio(3.5f);
-    amzn.setEVEBITDA(20.0f);
-    amzn.setROA(0.07f);
-    amzn.setROE(0.21f);
-    amzn.setROIC(0.15f);
-
-    Equity jpm("JPMorgan Chase & Co.", "NYSE", "JPM", 210.00f);
-    jpm.setSector("Financial Services");
-    jpm.setPERatio(12.0f);
-    jpm.setForwardPE(11.5f);
-    jpm.setPBRatio(1.7f);
-    jpm.setPSRatio(3.2f);
-    jpm.setEVEBITDA(10.0f);
-    jpm.setROA(0.013f);
-    jpm.setROE(0.17f);
-    jpm.setROIC(0.14f);
-
-    Equity intc("Intel Corp.", "NASDAQ", "INTC", 30.00f);
-    intc.setSector("Technology");
-    intc.setPERatio(85.0f);
-    intc.setForwardPE(25.0f);
-    intc.setPBRatio(1.2f);
-    intc.setPSRatio(2.3f);
-    intc.setEVEBITDA(14.0f);
-    intc.setROA(0.01f);
-    intc.setROE(0.04f);
-    intc.setROIC(0.03f);
-
-    std::vector<Equity> equities = {aapl, msft, nvda, googl, amzn, jpm, intc};
-
-    for (auto equity : equities) {
-        std::cout << equity << std::endl;
+namespace {
+    std::string toUpper(std::string_view sv) {
+        std::string out;
+        for (char c : sv)
+            out += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return out;
     }
 
-    // Initialize Screener Engine
-    Engine::Engine screener;
-    screener.addEquity(aapl);
-    screener.addEquity(msft);
-    screener.addEquity(nvda);
-    screener.addEquity(googl);
-    screener.addEquity(amzn);
-    screener.addEquity(jpm);
-    screener.addEquity(intc);
+    Data::Metric metricFromString(std::string_view name) {
+        static const std::map<std::string_view, Data::Metric> map = {
+            {"SPOTPRICE", Data::Metric::SpotPrice},
+            {"PE",        Data::Metric::PE},
+            {"FORWARDPE", Data::Metric::ForwardPE},
+            {"PB",        Data::Metric::PB},
+            {"PS",        Data::Metric::PS},
+            {"EVEBITDA",  Data::Metric::EVEBITDA},
+            {"ROA",       Data::Metric::ROA},
+            {"ROE",       Data::Metric::ROE},
+            {"ROIC",      Data::Metric::ROIC},
+        };
+        auto it = map.find(toUpper(name));
+        return (it != map.end()) ? it->second : Data::Metric::SpotPrice;
+    }
 
-    std::cout << "Loaded " << screener.getUniverseSize() << " equities into the screening engine.\n\n";
+    bool isValidMetric(std::string_view name) {
+        static const auto sentinel = Data::Metric::SpotPrice;
+        // relies on metricFromString returning SpotPrice as sentinel for unknowns
+        return metricFromString(name) != sentinel
+            || toUpper(name) == "SPOTPRICE";
+    }
 
-    // --- Screen 1: Reasonable Valuation + High Profitability ---
-    // Criteria: P/E <= 30.0 AND ROE >= 15% (0.15) AND EV/EBITDA <= 20.0
-    screener.clearFilters();
-    screener.filterPE(0.0f, 30.0f)
-            .filterROE(0.15f)
-            .filterEVEBITDA(0.0f, 20.0f);
+    void printUsage() {
+        std::println(stderr,
+            "EquitiesScreener - filter and rank stocks from a CSV file.\n"
+            "\n"
+            "Usage:\n"
+            "  EquitiesScreener <input.csv> [options]\n"
+            "\n"
+            "Options:\n"
+            "  -f, --filter <METRIC:MIN:MAX>   Apply a filter. MAX is optional.\n"
+            "                                  Repeatable. Examples:\n"
+            "                                    -f PE:0:30       (0 <= PE <= 30)\n"
+            "                                    -f ROE:0.15:     (ROE >= 15%)\n"
+            "                                    -f EVEBITDA::20  (EV/EBITDA <= 20)\n"
+            "\n"
+            "  -s, --sort   <METRIC[:ASC]>     Sort by metric (default: descending).\n"
+            "                                  Example: -s ROE  or  -s PE:ASC\n"
+            "\n"
+            "  -o, --output <FILE>             Write CSV to file. Default: stdout.\n"
+            "\n"
+            "  -p, --pretty                    Pretty-print results to terminal.\n"
+            "\n"
+            "  -h, --help                      Show this message.\n"
+        );
+    }
 
-    std::cout << "[Screen 1] Equities with P/E <= 30.0, ROE >= 15%, EV/EBITDA <= 20.0 (Sorted by ROE descending):\n";
-    auto screen1_results = screener.runScreenAndSort(Metric::ROE, Engine::SortOrder::Descending);
-    screener.printResults(screen1_results);
+    std::optional<Engine::FilterRule> parseFilterArg(std::string_view arg) {
+        auto colon1 = arg.find(':');
+        if (colon1 == std::string_view::npos) return std::nullopt;
 
-    // --- Screen 2: High Return on Capital (ROIC >= 25%) ---
-    screener.clearFilters();
-    screener.filterROIC(0.25f);
+        std::string_view metricName = arg.substr(0, colon1);
+        if (!isValidMetric(metricName)) {
+            std::println(stderr, "Unknown metric: \"{}\"", metricName);
+            return std::nullopt;
+        }
 
-    std::cout << "\n[Screen 2] High ROIC Equities (ROIC >= 25%, Sorted by ROIC descending):\n";
-    auto screen2_results = screener.runScreenAndSort(Metric::ROIC, Engine::SortOrder::Descending);
-    screener.printResults(screen2_results);
+        auto rest   = arg.substr(colon1 + 1);
+        auto colon2 = rest.find(':');
+        auto minStr = rest.substr(0, colon2);
+        auto maxStr = (colon2 == std::string_view::npos)
+                          ? std::string_view{}
+                          : rest.substr(colon2 + 1);
 
+        // trim whitespace before numeric parsing
+        auto trimSv = [](std::string_view s) {
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))  s.remove_suffix(1);
+            return s;
+        };
 
+        float minVal = -std::numeric_limits<float>::infinity();
+        float maxVal =  std::numeric_limits<float>::infinity();
+
+        if (!minStr.empty()) {
+            auto trimmed = trimSv(minStr);
+            auto [_, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), minVal);
+            if (ec != std::errc{}) {
+                std::println(stderr, "Invalid number in filter: \"{}\"", trimmed);
+                return std::nullopt;
+            }
+        }
+        if (!maxStr.empty()) {
+            auto trimmed = trimSv(maxStr);
+            auto [_, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), maxVal);
+            if (ec != std::errc{}) {
+                std::println(stderr, "Invalid number in filter: \"{}\"", trimmed);
+                return std::nullopt;
+            }
+        }
+
+        return Engine::FilterRule{metricFromString(metricName), minVal, maxVal};
+    }
+
+    std::optional<std::pair<Data::Metric, Engine::SortOrder>>
+    parseSortArg(std::string_view arg) {
+        auto colon = arg.find(':');
+        std::string_view metricName = arg.substr(0, colon);
+        if (!isValidMetric(metricName)) {
+            std::println(stderr, "Unknown sort metric: \"{}\"", metricName);
+            return std::nullopt;
+        }
+        Engine::SortOrder order = Engine::SortOrder::Descending;
+        if (colon != std::string_view::npos) {
+            auto orderStr = arg.substr(colon + 1);
+            if (orderStr == "ASC" || orderStr == "asc")
+                order = Engine::SortOrder::Ascending;
+        }
+        return std::pair{metricFromString(metricName), order};
+    }
+} // anonymous namespace
+
+// ============================================================
+//  CLI argument parser
+// ============================================================
+
+CliArgs parseArgs(int argc, char** argv) {
+    CliArgs opts;
+    if (argc < 2) { opts.valid = false; return opts; }
+
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg{argv[i]};
+
+        if (arg == "-h" || arg == "--help") {
+            opts.help = true;
+            return opts;
+        }
+        if (arg == "-p" || arg == "--pretty") {
+            opts.pretty = true;
+            continue;
+        }
+        if (arg == "-f" || arg == "--filter") {
+            if (i + 1 >= argc) { opts.valid = false; return opts; }
+            auto rule = parseFilterArg(argv[++i]);
+            if (!rule) { opts.valid = false; return opts; }
+            opts.filters.push_back(std::move(*rule));
+            continue;
+        }
+        if (arg == "-s" || arg == "--sort") {
+            if (i + 1 >= argc) { opts.valid = false; return opts; }
+            auto s = parseSortArg(argv[++i]);
+            if (!s) { opts.valid = false; return opts; }
+            opts.sort = std::move(*s);
+            continue;
+        }
+        if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= argc) { opts.valid = false; return opts; }
+            opts.outputFile = argv[++i];
+            continue;
+        }
+
+        if (opts.inputFile.empty() && !arg.starts_with('-')) {
+            opts.inputFile = arg;
+        } else if (!arg.starts_with('-')) {
+            opts.valid = false;
+            return opts;
+        } else {
+            opts.valid = false;
+            return opts;
+        }
+    }
+
+    if (opts.inputFile.empty()) opts.valid = false;
+    return opts;
+}
+
+// ============================================================
+//  Main pipeline
+// ============================================================
+
+int main(int argc, char* argv[]) {
+    auto opts = parseArgs(argc, argv);
+
+    if (opts.help) {
+        printUsage();
+        return 0;
+    }
+    if (!opts.valid || opts.inputFile.empty()) {
+        printUsage();
+        return 2;
+    }
+
+    // --- read CSV ---
+    auto csvResult = IO::readCsv(opts.inputFile);
+    if (!csvResult) {
+        switch (csvResult.error()) {
+        case IO::CsvError::FileNotFound:
+            std::println(stderr, "Error: file not found - \"{}\"", opts.inputFile);
+            break;
+        case IO::CsvError::EmptyFile:
+            std::println(stderr, "Error: file is empty - \"{}\"", opts.inputFile);
+            break;
+        default:
+            std::println(stderr, "Error: could not read \"{}\"", opts.inputFile);
+            break;
+        }
+        return 1;
+    }
+
+    for (const auto& w : csvResult->warnings)
+        std::println(stderr, "Warning: {}", w);
+
+    // --- engine ---
+    Engine::Engine screener(std::move(csvResult->equities));
+
+    for (const auto& rule : opts.filters)
+        screener.addFilter(rule);
+
+    auto results = screener.runScreen();
+
+    if (opts.sort)
+        Engine::Engine::sortEquities(results, opts.sort->first, opts.sort->second);
+
+    // --- output ---
+    if (opts.pretty) {
+        screener.printResults(results);
+    } else if (!opts.outputFile.empty()) {
+        auto written = IO::writeCsv(opts.outputFile, results);
+        if (!written) {
+            std::println(stderr, "Error: could not write to \"{}\"", opts.outputFile);
+            return 1;
+        }
+        std::println(stderr, "Wrote {} equities to \"{}\"", results.size(), opts.outputFile);
+    } else {
+        IO::writeCsv(std::cout, results);
+    }
 
     return 0;
 }

@@ -4,6 +4,7 @@ A lightweight C++ equity screening engine that filters and ranks stocks based on
 
 ## Features
 
+- **CSV I/O** — load equity universes from CSV files and export screened results back to CSV
 - **Multi-metric filtering** — screen equities by P/E, Forward P/E, P/B, P/S, EV/EBITDA, ROA, ROE, and ROIC
 - **Chainable filter API** — compose screens fluently (e.g. `.filterPE(0, 30).filterROE(0.15)`)
 - **Sorting** — sort results ascending or descending by any supported metric
@@ -19,7 +20,11 @@ EquitiesScreener/
 ├── engine/
 │   ├── Engine.h        # Screening engine interface
 │   └── Engine.cpp      # Filter, screen, sort logic
-├── main.cpp            # Example screens
+├── io/
+│   ├── Csv.h           # CSV reader & writer API
+│   └── Csv.cpp         # Parsing & formatting with C++23 ranges
+├── main.cpp            # CLI — CSV in, filtered/sorted CSV out
+├── sample.csv          # 7-ticker sample universe
 └── CMakeLists.txt
 ```
 
@@ -35,19 +40,42 @@ cmake --build build
 
 Or open the project directly in **CLion** — it will pick up `CMakeLists.txt` automatically.
 
-## Example Usage
+## CLI Usage
+
+```bash
+# Pipe screened stocks to stdout (Unix filter style)
+EquitiesScreener stocks.csv -f PE:0:30 -f ROE:0.15 -s ROE > value.csv
+
+# Write to file
+EquitiesScreener stocks.csv -f ROIC:0.25: -o high_roic.csv
+
+# Pretty-print to terminal
+EquitiesScreener stocks.csv -f PE:0:30 -f ROE:0.15 -p
+
+# Show help
+EquitiesScreener -h
+```
+
+### C++ Library API
 
 ```cpp
-Engine::Engine screener;
-screener.addEquity(aapl);
-screener.addEquity(msft);
+#include "data/Equity.h"
+#include "engine/Engine.h"
+#include "io/Csv.h"
 
-// Screen: P/E <= 30, ROE >= 15%, EV/EBITDA <= 20 — sorted by ROE descending
+// Read CSV into the engine
+auto csv = IO::readCsv("stocks.csv");
+if (!csv) { /* handle error */ }
+
+Engine::Engine screener(std::move(csv->equities));
 screener.filterPE(0.0f, 30.0f)
         .filterROE(0.15f)
         .filterEVEBITDA(0.0f, 20.0f);
 
 auto results = screener.runScreenAndSort(Data::Metric::ROE, Engine::SortOrder::Descending);
+
+// Write results back to CSV
+IO::writeCsv("screened.csv", results);
 screener.printResults(results);
 ```
 
