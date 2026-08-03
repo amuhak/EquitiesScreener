@@ -9,6 +9,8 @@ add_executable(EquitiesScreener
         data/Equity.cpp
         data/Equity.h
         engine/Engine.cpp
-        engine/Engine.h)
+        engine/Engine.h
+        io/Csv.cpp
+        io/Csv.h)
 
 target_include_directories(EquitiesScreener PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

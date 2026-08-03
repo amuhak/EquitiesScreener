@@ -1,0 +1,8 @@
+ticker,name,exchange,sector,spot_price,pe,forward_pe,pb,ps,ev_ebitda,roa,roe,roic
+AAPL,Apple Inc.,NASDAQ,Technology,220.50,33.50,28.00,45.00,8.20,24.50,0.2200,1.5000,0.5500
+MSFT,Microsoft Corp.,NASDAQ,Technology,420.00,35.00,30.00,12.00,13.00,22.00,0.1900,0.3800,0.2800
+NVDA,NVIDIA Corp.,NASDAQ,Technology,125.00,68.00,40.00,48.00,32.00,55.00,0.4200,1.1500,0.7000
+GOOGL,Alphabet Inc.,NASDAQ,Communication Services,175.00,24.00,20.00,6.50,6.80,16.50,0.1600,0.3000,0.2500
+AMZN,Amazon.com Inc.,NASDAQ,Consumer Cyclical,180.00,42.00,32.00,8.00,3.50,20.00,0.0700,0.2100,0.1500
+JPM,JPMorgan Chase & Co.,NYSE,Financial Services,210.00,12.00,11.50,1.70,3.20,10.00,0.0130,0.1700,0.1400
+INTC,Intel Corp.,NASDAQ,Technology,30.00,85.00,25.00,1.20,2.30,14.00,0.0100,0.0400,0.0300
