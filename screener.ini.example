@@ -1,0 +1,150 @@
+# ============================================================================
+#  EquitiesScreener — settings file template (screener.ini)
+# ============================================================================
+#
+#  WHAT THIS IS
+#  ------------
+#  This file configures one or more screening "screens". Copy it to
+#  "screener.ini" in the folder you run the program from, then just run:
+#
+#      EquitiesScreener
+#
+#  ...or point at any file explicitly:
+#
+#      EquitiesScreener --config my-settings.ini
+#
+#  HOW A RUN WORKS
+#  ---------------
+#  1. The universe CSV (see the `input` key below) is read ONCE and shared by
+#     every screen.
+#  2. Each [screen:...] section defines one independent screen:
+#       - `filter` rules are AND-ed together (a stock must pass EVERY rule)
+#       - matched stocks are sorted by `sort`, if present
+#       - one CSV is written per screen
+#  3. Every output CSV contains the FULL set of 13 columns for each matched
+#     stock (ticker, name, exchange, sector, spot_price, pe, forward_pe, pb,
+#     ps, ev_ebitda, roa, roe, roic) — nothing is dropped.
+#
+#  FILE RULES
+#  ----------
+#  - Lines starting with '#' or ';' are comments. Comments must be on their
+#    OWN line — there is no inline-comment syntax.
+#  - Blank lines are ignored.
+#  - Keys and values are case-insensitive: `input`, `INPUT`, `pe`, `PE`, and
+#    `Asc` are all accepted. Screen names are matched case-insensitively too,
+#    so use distinct spellings for distinct screens.
+#  - Values are trimmed of leading/trailing whitespace.
+#  - Paths are relative to the current working directory.
+#  - Duplicate scalar keys are an error (two `input =` lines, or two sections
+#    with the same name). Repeated `filter =` lines are intentional and ADDITIVE.
+#  - The file is parsed top-to-bottom and FAILS FAST on the first error,
+#    reporting the line number.
+#
+#  CLI OVERRIDES
+#  -------------
+#  These flags extend/override this file from the command line:
+#      -f PE:0:10    adds a filter to EVERY screen in the file
+#      -s PE:asc     overrides the sort of EVERY screen
+#      -o out.csv    overrides the output — only allowed when the file
+#                    defines exactly ONE screen
+#      -i stocks.csv overrides the universe CSV (same as passing it
+#                    as a positional argument)
+#      -p            also pretty-prints each screen's results to the terminal
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+#  GLOBAL KEY:  input
+# ----------------------------------------------------------------------------
+#  The CSV file containing your stock universe: one row per stock, with the
+#  first row as the header. Required 13-column layout (see sample.csv):
+#
+#    ticker,name,exchange,sector,spot_price,pe,forward_pe,pb,ps,
+#    ev_ebitda,roa,roe,roic
+#
+#  Stocks may leave optional metrics blank; a blank cell is treated as
+#  "missing" (see MISSING DATA below).
+#
+#  Override on the command line with a positional argument or --input:
+#      EquitiesScreener --config my.ini my-stocks.csv
+#      EquitiesScreener --config my.ini --input my-stocks.csv
+input = sample.csv
+
+
+# ============================================================================
+#  SCREENS
+# ============================================================================
+#  Each screen is a [screen:NAME] section. The screen name doubles as the
+#  auto-generated output filename ({name}_screened.csv) when you omit the
+#  `output` key, so pick names like "value", "growth", "cheap_largecaps".
+#
+#  SCREEN KEYS
+#  -----------
+#    filter = METRIC:MIN:MAX   repeatable, AND-combined (syntax below)
+#    sort   = METRIC[:ASC|DESC]  optional; DESCENDING is the default
+#    output = <file.csv>       optional; defaults to {name}_screened.csv
+#
+#  FILTER SYNTAX —  filter = METRIC:MIN:MAX
+#    METRIC  one of SPOTPRICE, PE, FORWARDPE, PB, PS, EVEBITDA, ROA, ROE, ROIC
+#            (case-insensitive)
+#    MIN     lower bound (inclusive). Leave empty for no lower bound.
+#    MAX     upper bound (inclusive). Leave empty for no upper bound.
+#    A stock passes when  MIN <= value <= MAX.
+#    ROA / ROE / ROIC are DECIMALS, exactly like the CSV: 0.15 means 15%.
+#
+#    Examples:
+#      filter = PE:0:30        0 <= PE <= 30
+#      filter = ROE:0.15:      ROE >= 15%   (min only)
+#      filter = EVEBITDA::20   EV/EBITDA <= 20   (max only)
+#
+#  MISSING DATA
+#    If a stock is missing the metric a filter asks about, it is EXCLUDED from
+#    that screen and a warning is printed to stderr. A missing value never
+#    silently passes or fails a filter as if it were zero.
+# ============================================================================
+
+
+[screen:value]
+# A classic value screen — three filters AND-ed together.
+filter = PE:0:30
+filter = ROE:0.15:
+filter = EVEBITDA::20
+# Highest ROE first. 'desc' is the default order, so this line is optional;
+# it is shown explicitly here for clarity. 'DESC' and 'desc' both work.
+sort = ROE:desc
+# Explicit output path, relative to the working directory.
+output = value_screened.csv
+
+
+[screen:growth]
+# A growth screen: strong return on invested capital.
+filter = ROIC:0.25:
+# Ascending this time: weakest ROIC first.
+sort = ROIC:asc
+# No `output =` line here — the program auto-writes "growth_screened.csv"
+# (screen name + "_screened.csv").
+
+
+[screen:cheap_largecaps]
+; This screen uses the ';' comment style (both work).
+; Large, reasonably priced names: spot price between $50 and $500, P/B under 5.
+; Note the lowercase 'pb' — metric names are case-insensitive.
+filter = SPOTPRICE:50:500
+filter = pb::5
+sort = PB
+# ^ `sort` with no :ASC/:DESC suffix sorts DESCENDING (largest P/B first).
+
+
+[screen:quality]
+# The remaining metrics, for completeness: FORWARDPE, PS, and ROA.
+filter = FORWARDPE::25
+filter = PS::10
+filter = ROA:0.10:
+sort = ROA:desc
+output = quality_screened.csv
+
+
+[screen:export]
+# A screen with NO filters passes the whole universe through untouched — a
+# handy way to copy or "transcode" your input CSV. No `sort` either, so rows
+# keep their input-file order. Output is auto-named: export_screened.csv.
